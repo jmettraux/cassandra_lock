@@ -1,0 +1,58 @@
+== CassandraLock
+
+Distributed mutexes using Cassandra
+
+== Summary
+
+This is just a proof of concept implementation of
+Lamport's_Bakery_Algorithm[http://en.wikipedia.org/wiki/Lamport's_bakery_algorithm].
+
+It uses Cassandra to store and operate on the locks, instead of
+local shared memory. This is feasible because the Bakery algorithm
+(awesomely?) does not rely on a CAS primitive.
+
+It supports any number of locks because they are just Cassandra rows.
+
+== Example
+
+ # Sets up column families used for the lock data
+ CassandraLock.keyspace = "MyApp"
+ CassandraLock.host = "127.0.0.1:9160"
+ CassandraLock.reset_cfs!
+
+ # Initialize a lock called "foo" with a maximum of 10 workers
+ CassandraLock.setup_lock("foo", 10)
+
+ # Create a corresponding lock object with worker id 1 (ids start at 1, not 0)
+ lock = CassandraLock.new("foo", 1)
+
+ # Normal lock/unlock
+ lock.lock
+ ...stuff...
+ lock.unlock
+
+ # Acquire, yield, and release
+ lock.synchronize {
+   ...stuff...
+ }
+
+ # Only do something if the lock is immediately available
+ if lock.try_lock
+   ...stuff...
+   lock.unlock
+ else
+   raise "couldn't acquire lock!"
+ end
+
+== Problems (lots)
+
+* The lock must have it's maximum number of workers predefined.
+* Workers using the lock must know their unique worker ID.
+* It has to use quorum reads and writes to be coherent.
+* It's inefficient, taking 5 or so exchanges with Cassandra just to acquire a free lock.
+* Acquisition time increases significantly with some correlation to the number of active workers.
+* A crashed worker can leave the mutex locked. This is probably addressable with Cassandra TTLs.
+* Locking in a distributed database...hmm.
+
+
+Implemented by Jake Douglas at RightScale, Inc. Concept from Thorsten von Eicken.
