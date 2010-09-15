@@ -107,7 +107,13 @@ class CassandraLock
   end
 
   def try_lock
-    worker_count, my_number = get_worker_count_and_current_number(@lock_id, @my_worker_id)
+    worker_count, my_number = get_worker_count_and_current_number(@lock_id, @my_worker_id, true)
+
+    # bail early if someone was already holding/waiting
+    unless my_number
+      return false
+    end
+
     lock_acquired = acquire(@lock_id, worker_count, my_number, @my_worker_id, false)
 
     unless lock_acquired
@@ -162,7 +168,7 @@ class CassandraLock
     true
   end
 
-  def get_worker_count_and_current_number(lock_id, worker_id)
+  def get_worker_count_and_current_number(lock_id, worker_id, fail_fast=false)
     worker_id = worker_id.to_s
 
     # indicate that we are in the process of picking a number
@@ -170,6 +176,15 @@ class CassandraLock
 
     # get the current highest number, add 1, insert it as our number
     numbers = get(NUMBERS, lock_id)
+
+    # for try_lock, just bail if anyone is holding/waiting
+    if fail_fast
+      if numbers.values.any?{|v| v != "0" }
+        set(CHOOSING, lock_id, { worker_id => FALSE })
+        return false
+      end
+    end
+
     my_number = numbers.values.map{|n| n.to_i }.max + 1
     set(NUMBERS, lock_id, { worker_id => my_number.to_s })
 
