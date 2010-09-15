@@ -2,7 +2,7 @@ require 'lib/cassandra_lock'
 
 describe "CassandraLock" do
   before(:all) do
-    CassandraLock.reset_cfs!
+    CassandraLock.reset_cf!
   end
 
   before(:each) do

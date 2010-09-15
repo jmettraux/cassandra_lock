@@ -7,8 +7,9 @@ end
 class CassandraLock
   TRUE = "1"
   FALSE = "0"
-  CHOOSING = "_locks_choosing"
-  NUMBERS = "_locks_numbers"
+  CF = "_cassandra_locks"
+  CHOOSING = "_choosing"
+  NUMBERS = "_numbers"
   SLEEP_DURATION = 0.1
 
   class << self
@@ -22,32 +23,26 @@ class CassandraLock
       @keyspace || "CassandraLock"
     end
 
-    def reset_cfs!
+    def reset_cf!
       if Cassandra.VERSION < "0.7"
         raise "Need Cassandra 0.7 to manipulate CFs"
       end
 
-      client.drop_column_family(CHOOSING) rescue nil
-      client.drop_column_family(NUMBERS) rescue nil
-
-      cf_defs.each do |cf|
-        client.add_column_family(cf)
-      end
+      client.drop_column_family(CF) rescue nil
+      client.add_column_family(cf_def)
 
       nil
     end
 
     def setup_lock(lock_id, max_workers)
-      if get(CHOOSING, lock_id).any? || get(NUMBERS, lock_id).any?
+      if get(lock_id)[NUMBERS]
         raise "Lock #{lock_id} exists! use reset_lock()"
       end
 
       workers = (1..max_workers)
       empty = workers.inject({}){|acc, worker| acc.merge(worker.to_s => "0") }
 
-      set(CHOOSING, lock_id, empty)
-      set(NUMBERS,  lock_id, empty)
-
+      set(lock_id, { CHOOSING => empty, NUMBERS => empty })
       nil
     end
 
@@ -57,23 +52,21 @@ class CassandraLock
     end
 
     def delete_lock(lock_id)
-      client.remove(CHOOSING, lock_id, :consistency => Cassandra::Consistency::QUORUM)
-      client.remove(NUMBERS,  lock_id, :consistency => Cassandra::Consistency::QUORUM)
+      client.remove(CF, lock_id, :consistency => Cassandra::Consistency::QUORUM)
     end
 
-    def cf_defs
-      [Cassandra::ColumnFamily.new(:keyspace => self.keyspace,
-                                   :name => CHOOSING),
-       Cassandra::ColumnFamily.new(:keyspace => self.keyspace,
-                                   :name => NUMBERS)]
+    def cf_def
+      Cassandra::ColumnFamily.new(:keyspace => self.keyspace,
+                                  :name => CF,
+                                  :column_type => "Super")
     end
 
-    def get(cf, key)
-      client.get(cf, key, :consistency => Cassandra::Consistency::QUORUM)
+    def get(key)
+      client.get(CF, key, :consistency => Cassandra::Consistency::QUORUM)
     end
 
-    def set(cf, key, value)
-      client.insert(cf, key, value, :consistency => Cassandra::Consistency::QUORUM)
+    def set(key, value)
+      client.insert(CF, key, value, :consistency => Cassandra::Consistency::QUORUM)
     end
 
     def client
@@ -87,13 +80,13 @@ class CassandraLock
     @my_worker_id = my_worker_id
     @client = Cassandra.new(@keyspace)
 
-    numbers = get(NUMBERS, @lock_id)
+    lock_data = get(@lock_id)
 
-    if numbers.empty?
+    unless lock_data[NUMBERS]
       raise "Lock '#{lock_id}' does not exist"
     end
 
-    workers = numbers.keys.map{|n| n.to_i }
+    workers = lock_data[NUMBERS].keys.map{|n| n.to_i }
     range = (workers.min)..(workers.max)
 
     unless range.include?(my_worker_id)
@@ -142,23 +135,22 @@ class CassandraLock
   private
 
   def acquire(lock_id, worker_count, my_number, my_worker_id, should_wait)
-    choosing = get(CHOOSING, lock_id)
-    numbers  = get(NUMBERS, lock_id)
+    lock_data = get(lock_id)
 
     (1..worker_count).each do |worker_id|
-      while is_worker_choosing?(choosing, worker_id)
+      while is_worker_choosing?(lock_data[CHOOSING], worker_id)
         if should_wait
           sleep SLEEP_DURATION
-          choosing = get(CHOOSING, lock_id)
+          lock_data = get(lock_id)
         else
           return false
         end
       end
 
-      while am_i_waiting_behind_worker?(numbers, worker_id, my_number, my_worker_id)
+      while am_i_waiting_behind_worker?(lock_data[NUMBERS], worker_id, my_number, my_worker_id)
         if should_wait
           sleep SLEEP_DURATION
-          numbers = get(NUMBERS, lock_id)
+          lock_data = get(lock_id)
         else
           return false
         end
@@ -172,31 +164,31 @@ class CassandraLock
     worker_id = worker_id.to_s
 
     # indicate that we are in the process of picking a number
-    set(CHOOSING, lock_id, { worker_id => TRUE })
+    set(lock_id, { CHOOSING => { worker_id => TRUE } })
 
     # get the current highest number, add 1, insert it as our number
-    numbers = get(NUMBERS, lock_id)
+    numbers = get(lock_id)[NUMBERS]
 
     # for try_lock, just bail if anyone is holding/waiting
     if fail_fast
       if numbers.values.any?{|v| v != "0" }
-        set(CHOOSING, lock_id, { worker_id => FALSE })
+        set(lock_id, { CHOOSING => { worker_id => FALSE } })
         return false
       end
     end
 
     my_number = numbers.values.map{|n| n.to_i }.max + 1
-    set(NUMBERS, lock_id, { worker_id => my_number.to_s })
+    set(lock_id, { NUMBERS => { worker_id => my_number.to_s } })
 
     # indicate that we are done choosing our number
-    set(CHOOSING, lock_id, { worker_id => FALSE })
+    set(lock_id, { CHOOSING => { worker_id => FALSE } })
 
     # return the total count of workers and our current number
     [numbers.size, my_number]
   end
 
   def get_out_of_line
-    set(NUMBERS, @lock_id, { @my_worker_id.to_s => "0" })
+    set(@lock_id, { NUMBERS => { @my_worker_id.to_s => "0" } })
   end
 
   def is_worker_choosing?(choosing, worker_id)
@@ -208,12 +200,12 @@ class CassandraLock
     his_number != 0 && (his_number < my_number || (his_number == my_number && his_worker_id < my_worker_id))
   end
 
-  def get(cf, key)
-    @client.get(cf, key, :consistency => Cassandra::Consistency::QUORUM)
+  def get(key)
+    @client.get(CF, key, :consistency => Cassandra::Consistency::QUORUM)
   end
 
-  def set(cf, key, value)
-    @client.insert(cf, key, value, :consistency => Cassandra::Consistency::QUORUM)
+  def set(key, value)
+    @client.insert(CF, key, value, :consistency => Cassandra::Consistency::QUORUM)
   end
 
 end

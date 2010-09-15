@@ -32,25 +32,25 @@ task :reset_keyspace do
   ks_def = Cassandra::Keyspace.new(:name => keyspace,
                                    :strategy_class => "org.apache.cassandra.locator.RackUnawareStrategy",
                                    :replication_factor => rf.to_i,
-                                   :cf_defs => CassandraLock.cf_defs)
+                                   :cf_defs => [CassandraLock.cf_def])
 
   c.add_keyspace(ks_def)
 
   puts "Done"
 end
 
-task :reset_cfs do
+task :reset_cf do
   keyspace = ENV['KEYSPACE'] || "CassandraLock"
   host     = ENV['HOST']     || "127.0.0.1:9160"
 
   puts "Using values:"
   puts "KEYSPACE: #{keyspace}"
   puts "HOST: #{host}"
-  puts "Resetting lock CFs..."
+  puts "Resetting lock CF..."
 
   CassandraLock.keyspace = keyspace
   CassandraLock.host = host
-  CassandraLock.reset_cfs!
+  CassandraLock.reset_cf!
 
   puts "Done"
 end
