@@ -23,23 +23,23 @@ It supports any number of locks because they are just Cassandra rows.
  # Initialize a lock called "foo" with a maximum of 10 workers
  CassandraLock.setup_lock("foo", 10)
 
- # Create a corresponding lock object with worker id 1 (ids start at 1, not 0)
- lock = CassandraLock.new("foo", 1)
+ # Create a corresponding lock handle with worker id 1 (ids start at 1, not 0)
+ handle = CassandraLock::Handle.new("foo", 1)
 
- # Normal lock/unlock
- lock.lock
+ # Normal lock/unlock (waits if the lock is not available)
+ handle.lock
  ...stuff...
- lock.unlock
+ handle.unlock
 
  # Acquire, yield, and release
- lock.synchronize {
+ handle.synchronize {
    ...stuff...
  }
 
  # Only do something if the lock is immediately available
- if lock.try_lock
+ if handle.try_lock
    ...stuff...
-   lock.unlock
+   handle.unlock
  else
    raise "couldn't acquire lock!"
  end

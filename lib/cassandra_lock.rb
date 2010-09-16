@@ -74,138 +74,141 @@ class CassandraLock
     end
   end
 
-  def initialize(lock_id, my_worker_id, keyspace=nil)
-    @keyspace = keyspace || self.class.keyspace
-    @lock_id = lock_id
-    @my_worker_id = my_worker_id
-    @client = Cassandra.new(@keyspace)
+  class Handle
+    def initialize(lock_id, my_worker_id, keyspace=nil)
+      @keyspace = keyspace || CassandraLock.keyspace
+      @lock_id = lock_id
+      @my_worker_id = my_worker_id
+      @client = Cassandra.new(@keyspace)
 
-    lock_data = get(@lock_id)
+      lock_data = get(@lock_id)
 
-    unless lock_data[NUMBERS]
-      raise "Lock '#{lock_id}' does not exist"
-    end
-
-    workers = lock_data[NUMBERS].keys.map{|n| n.to_i }
-    range = (workers.min)..(workers.max)
-
-    unless range.include?(my_worker_id)
-      raise ArgumentError, "Worker ID #{my_worker_id} out of range. Valid range for this lock: #{range}"
-    end
-  end
-
-  def lock
-    worker_count, my_number = get_worker_count_and_current_number(@lock_id, @my_worker_id)
-    acquire(@lock_id, worker_count, my_number, @my_worker_id, true)
-  end
-
-  def try_lock
-    worker_count, my_number = get_worker_count_and_current_number(@lock_id, @my_worker_id, true)
-
-    # bail early if someone was already holding/waiting
-    unless my_number
-      return false
-    end
-
-    lock_acquired = acquire(@lock_id, worker_count, my_number, @my_worker_id, false)
-
-    unless lock_acquired
-      get_out_of_line
-    end
-
-    lock_acquired
-  end
-
-  def unlock
-    get_out_of_line
-    nil
-  end
-
-  def synchronize
-    unless block_given?
-      raise ArgumentError, "Block required"
-    end
-
-    lock()
-    yield
-  ensure
-    unlock()
-  end
-
-  private
-
-  def acquire(lock_id, worker_count, my_number, my_worker_id, should_wait)
-    lock_data = get(lock_id)
-
-    (1..worker_count).each do |worker_id|
-      while is_worker_choosing?(lock_data[CHOOSING], worker_id)
-        if should_wait
-          sleep SLEEP_DURATION
-          lock_data = get(lock_id)
-        else
-          return false
-        end
+      unless lock_data[NUMBERS]
+        raise "Lock '#{lock_id}' does not exist"
       end
 
-      while am_i_waiting_behind_worker?(lock_data[NUMBERS], worker_id, my_number, my_worker_id)
-        if should_wait
-          sleep SLEEP_DURATION
-          lock_data = get(lock_id)
-        else
-          return false
-        end
+      workers = lock_data[NUMBERS].keys.map{|n| n.to_i }
+      range = (workers.min)..(workers.max)
+
+      unless range.include?(my_worker_id)
+        raise ArgumentError, "Worker ID #{my_worker_id} out of range. Valid range for this lock: #{range}"
       end
     end
 
-    true
-  end
+    def lock
+      worker_count, my_number = get_worker_count_and_current_number(@lock_id, @my_worker_id)
+      acquire(@lock_id, worker_count, my_number, @my_worker_id, true)
+    end
 
-  def get_worker_count_and_current_number(lock_id, worker_id, fail_fast=false)
-    worker_id = worker_id.to_s
+    def try_lock
+      worker_count, my_number = get_worker_count_and_current_number(@lock_id, @my_worker_id, true)
 
-    # indicate that we are in the process of picking a number
-    set(lock_id, { CHOOSING => { worker_id => TRUE } })
-
-    # get the current highest number, add 1, insert it as our number
-    numbers = get(lock_id)[NUMBERS]
-
-    # for try_lock, just bail if anyone is holding/waiting
-    if fail_fast
-      if numbers.values.any?{|v| v != "0" }
-        set(lock_id, { CHOOSING => { worker_id => FALSE } })
+      # bail early if someone was already holding/waiting
+      unless my_number
         return false
       end
+
+      lock_acquired = acquire(@lock_id, worker_count, my_number, @my_worker_id, false)
+
+      unless lock_acquired
+        get_out_of_line
+      end
+
+      lock_acquired
     end
 
-    my_number = numbers.values.map{|n| n.to_i }.max + 1
-    set(lock_id, { NUMBERS => { worker_id => my_number.to_s } })
+    def unlock
+      get_out_of_line
+      nil
+    end
 
-    # indicate that we are done choosing our number
-    set(lock_id, { CHOOSING => { worker_id => FALSE } })
+    def synchronize
+      unless block_given?
+        raise ArgumentError, "Block required"
+      end
 
-    # return the total count of workers and our current number
-    [numbers.size, my_number]
-  end
+      lock()
+      yield
+    ensure
+      unlock()
+    end
 
-  def get_out_of_line
-    set(@lock_id, { NUMBERS => { @my_worker_id.to_s => "0" } })
-  end
+    private
 
-  def is_worker_choosing?(choosing, worker_id)
-    choosing[worker_id.to_s] == TRUE
-  end
+    def acquire(lock_id, worker_count, my_number, my_worker_id, should_wait)
+      lock_data = get(lock_id)
 
-  def am_i_waiting_behind_worker?(numbers, his_worker_id, my_number, my_worker_id)
-    his_number = numbers[his_worker_id.to_s].to_i
-    his_number != 0 && (his_number < my_number || (his_number == my_number && his_worker_id < my_worker_id))
-  end
+      (1..worker_count).each do |worker_id|
+        while is_worker_choosing?(lock_data[CHOOSING], worker_id)
+          if should_wait
+            sleep SLEEP_DURATION
+            lock_data = get(lock_id)
+          else
+            return false
+          end
+        end
 
-  def get(key)
-    @client.get(CF, key, :consistency => Cassandra::Consistency::QUORUM)
-  end
+        while am_i_waiting_behind_worker?(lock_data[NUMBERS], worker_id, my_number, my_worker_id)
+          if should_wait
+            sleep SLEEP_DURATION
+            lock_data = get(lock_id)
+          else
+            return false
+          end
+        end
+      end
 
-  def set(key, value)
-    @client.insert(CF, key, value, :consistency => Cassandra::Consistency::QUORUM)
+      true
+    end
+
+    def get_worker_count_and_current_number(lock_id, worker_id, fail_fast=false)
+      worker_id = worker_id.to_s
+
+      # indicate that we are in the process of picking a number
+      set(lock_id, { CHOOSING => { worker_id => TRUE } })
+
+      # get the current highest number, add 1, insert it as our number
+      numbers = get(lock_id)[NUMBERS]
+
+      # for try_lock, just bail if anyone is holding/waiting
+      if fail_fast
+        if numbers.values.any?{|v| v != "0" }
+          set(lock_id, { CHOOSING => { worker_id => FALSE } })
+          return false
+        end
+      end
+
+      my_number = numbers.values.map{|n| n.to_i }.max + 1
+      set(lock_id, { NUMBERS => { worker_id => my_number.to_s } })
+
+      # indicate that we are done choosing our number
+      set(lock_id, { CHOOSING => { worker_id => FALSE } })
+
+      # return the total count of workers and our current number
+      [numbers.size, my_number]
+    end
+
+    def get_out_of_line
+      set(@lock_id, { NUMBERS => { @my_worker_id.to_s => "0" } })
+    end
+
+    def is_worker_choosing?(choosing, worker_id)
+      choosing[worker_id.to_s] == TRUE
+    end
+
+    def am_i_waiting_behind_worker?(numbers, his_worker_id, my_number, my_worker_id)
+      his_number = numbers[his_worker_id.to_s].to_i
+      his_number != 0 && (his_number < my_number || (his_number == my_number && his_worker_id < my_worker_id))
+    end
+
+    def get(key)
+      @client.get(CF, key, :consistency => Cassandra::Consistency::QUORUM)
+    end
+
+    def set(key, value)
+      @client.insert(CF, key, value, :consistency => Cassandra::Consistency::QUORUM)
+    end
+
   end
 
 end
