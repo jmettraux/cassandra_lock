@@ -29,7 +29,12 @@ class CassandraLock
       end
 
       client.drop_column_family(CF) rescue nil
+
+      sleep 1 # give some time to the nodes to agree
+
       client.add_column_family(cf_def)
+
+      sleep 1 # give some time to the nodes to agree
 
       nil
     end

@@ -1,12 +1,15 @@
+
 require 'rubygems'
-require 'spec/rake/spectask'
+#require 'spec/rake/spectask'
+require 'rspec/core/rake_task'
 require 'lib/cassandra_lock'
 
 task :default => :spec
 
-Spec::Rake::SpecTask.new(:spec) do |t|
-  t.spec_opts = ["--colour --format=nested --backtrace"]
-  t.spec_files = Dir['spec/*.rb'].sort
+#Spec::Rake::SpecTask.new(:spec) do |t|
+RSpec::Core::RakeTask.new(:spec) do |t|
+  t.rspec_opts = ["--colour --format=nested --backtrace"]
+  #t.rspec_files = Dir['spec/*.rb'].sort
 end
 
 task :reset_keyspace do

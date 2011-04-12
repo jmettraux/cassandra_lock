@@ -59,7 +59,7 @@ describe "CassandraLock" do
       start = Time.now
       @handle2.lock
       time = Time.now - start
-      time.should be_close(0.5, 0.2)
+      time.should be_within(0.2).of(0.5)
     end
   end
 
