@@ -6,7 +6,6 @@ require 'fileutils'
 
 
 WORKER_COUNT = 10
-#WORKER_COUNT = 1
 
 #cl = Cassandra.new('CassandraLock')
 
@@ -21,10 +20,21 @@ WORKER_COUNT.times do |i|
 
   worker_pids << Process.fork do
 
+    start = Time.now
+    locks = 0
+
     handle = CassandraLock::Handle.new(
       'work', i + 1, "127.0.0.#{ (i % 5) + 1 }:9160")
 
-    #p handle.client
+    Signal.trap('INT') do
+      duration = Time.now - start
+      puts "#{i} : #{duration}s"
+      puts "#{i} : #{locks} locks"
+      puts "#{i} : #{locks/duration} locks/s"
+      puts "#{i} : #{handle.gcounts} reads"
+      puts "#{i} : #{handle.scounts} writes"
+      exit(0)
+    end
 
     loop do
 
@@ -35,11 +45,12 @@ WORKER_COUNT.times do |i|
       #STDERR.puts "#{i} ^^^"
 
       handle.unlock
+      locks += 1
     end
   end
 end
 
-sleep 3 * 60
+sleep 60
 
 at_exit do
   worker_pids.each { |pid| Process.kill('INT', pid) }

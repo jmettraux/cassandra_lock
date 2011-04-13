@@ -10,7 +10,8 @@ class CassandraLock
   CF = "_cassandra_locks"
   CHOOSING = "_choosing"
   NUMBERS = "_numbers"
-  SLEEP_DURATION = 0.1
+  #SLEEP_DURATION = 0.1
+  SLEEP_DURATION = 0.0
 
   class << self
     attr_writer :keyspace, :host
@@ -83,7 +84,13 @@ class CassandraLock
 
     attr_reader :client
 
+    attr_reader :gcounts, :scounts
+
     def initialize(lock_id, my_worker_id, host, keyspace=nil)
+
+      @gcounts = 0
+      @scounts = 0
+
       @keyspace = keyspace || CassandraLock.keyspace
       @lock_id = lock_id
       @my_worker_id = my_worker_id
@@ -211,10 +218,12 @@ class CassandraLock
     end
 
     def get(key)
+      @gcounts += 1
       @client.get(CF, key, :consistency => Cassandra::Consistency::QUORUM)
     end
 
     def set(key, value)
+      @scounts += 1
       @client.insert(CF, key, value, :consistency => Cassandra::Consistency::QUORUM)
     end
 
