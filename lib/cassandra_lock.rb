@@ -30,11 +30,11 @@ class CassandraLock
 
       client.drop_column_family(CF) rescue nil
 
-      sleep 1 # give some time to the nodes to agree
+      sleep 1 # give some time to the schema to agree
 
       client.add_column_family(cf_def)
 
-      sleep 1 # give some time to the nodes to agree
+      sleep 1 # give some time to the schema to agree
 
       nil
     end
@@ -80,11 +80,15 @@ class CassandraLock
   end
 
   class Handle
-    def initialize(lock_id, my_worker_id, keyspace=nil)
+
+    attr_reader :client
+
+    def initialize(lock_id, my_worker_id, host, keyspace=nil)
       @keyspace = keyspace || CassandraLock.keyspace
       @lock_id = lock_id
       @my_worker_id = my_worker_id
-      @client = Cassandra.new(@keyspace)
+      @client = Cassandra.new(@keyspace, host)
+      @client.disable_node_auto_discovery!
 
       lock_data = get(@lock_id)
 

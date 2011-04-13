@@ -33,7 +33,7 @@ task :reset_keyspace do
   CassandraLock.keyspace = keyspace
 
   ks_def = Cassandra::Keyspace.new(:name => keyspace,
-                                   :strategy_class => "org.apache.cassandra.locator.RackUnawareStrategy",
+                                   :strategy_class => "org.apache.cassandra.locator.SimpleStrategy",
                                    :replication_factor => rf.to_i,
                                    :cf_defs => [CassandraLock.cf_def])
 
